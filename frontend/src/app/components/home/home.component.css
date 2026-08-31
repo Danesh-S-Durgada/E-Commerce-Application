@@ -1,0 +1,17 @@
+.hero {
+  min-height: 70vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 40px;
+}
+.hero h1 { font-size: 44px; margin-bottom: 12px; }
+.hero p { font-size: 18px; margin-bottom: 28px; }
+.button {
+  display: inline-block;
+  padding: 12px 22px;
+  background: #111827;
+  color: white;
+  text-decoration: none;
+  border-radius: 6px;
+}

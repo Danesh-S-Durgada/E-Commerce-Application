@@ -1,0 +1,8 @@
+persistence:
+  enabled: false
+
+service:
+  type: ClusterIP
+
+adminUser: admin
+adminPassword: change-me
