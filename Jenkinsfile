@@ -143,7 +143,12 @@ pipeline {
             steps {
                 bat '''
                     echo ===== FRONTEND BUILD =====
-                    docker run --rm -v "%CD%\\frontend:/app" -w /app node:22-alpine sh -c "npm install && npm run build"
+
+                    docker run --rm ^
+                      -v "%CD%\\frontend:/app" ^
+                      -w /app ^
+                      node:22-alpine ^
+                      sh -c "npm ci && npm run build"
                 '''
             }
         }
