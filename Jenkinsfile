@@ -21,6 +21,28 @@ pipeline {
             }
         }
 
+        stage('Test EC2 SSH') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'ec2-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    bat '''
+                        echo ===== TESTING JENKINS TO EC2 SSH =====
+
+                        ssh -i "%SSH_KEY%" ^
+                          -o StrictHostKeyChecking=no ^
+                          -o UserKnownHostsFile=NUL ^
+                          %SSH_USER%@3.109.200.146 ^
+                          "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
+                    '''
+                }
+            }
+        }
+
         stage('Check Environment') {
             steps {
                 bat '''
