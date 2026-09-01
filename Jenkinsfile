@@ -245,7 +245,72 @@ pipeline {
                 '''
             }
         }
+
+        
+        stage('Deploy to EC2') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'EC2_KEY',
+                        keyFileVariable: 'EC2_KEY',
+                        usernameVariable: 'EC2_USER'
+                    )
+                ]) {
+                    bat '''
+                        echo ===== DEPLOYING TO EC2 =====
+
+                        echo ===== FIXING SSH KEY PERMISSIONS =====
+
+                        icacls "%EC2_KEY%" /inheritance:r
+                        icacls "%EC2_KEY%" /grant:r "SYSTEM:(R)"
+
+                        echo ===== TESTING EC2 SSH =====
+
+                        ssh -i "%EC2_KEY%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@3.109.200.146 ^
+                            "echo SSH CONNECTION SUCCESSFUL"
+
+                        echo ===== LOGIN TO ECR ON EC2 =====
+
+                        ssh -i "%EC2_KEY%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@3.109.200.146 ^
+                            "aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_BACKEND%"
+
+                        echo ===== PULLING NEW IMAGES =====
+
+                        ssh -i "%EC2_KEY%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@3.109.200.146 ^
+                            "cd ~/E-Commerce-Application && docker compose pull backend frontend"
+
+                        echo ===== DEPLOYING APPLICATION =====
+
+                        ssh -i "%EC2_KEY%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@3.109.200.146 ^
+                            "cd ~/E-Commerce-Application && docker compose up -d"
+
+                        echo ===== VERIFYING CONTAINERS =====
+
+                        ssh -i "%EC2_KEY%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@3.109.200.146 ^
+                            "cd ~/E-Commerce-Application && docker compose ps"
+
+                        echo ===== DEPLOYMENT COMPLETED =====
+                    '''
+                }
+            }
+        }
     }
+
 
     post {
         success {
