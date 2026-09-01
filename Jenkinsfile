@@ -170,69 +170,92 @@ pipeline {
 
         stage('Backend Tests') {
             steps {
-
                 bat '''
-                    echo ==================================================
-                    echo              BACKEND TESTS
-                    echo ==================================================
+                echo ==================================================
+                echo              BACKEND TESTS
+                echo ==================================================
 
-                    echo.
-                    echo ===== REMOVING OLD TEST DATABASE =====
+                echo.
+                echo ===== REMOVING OLD TEST DATABASE =====
+                docker rm -f ecommerce-test-db 2>nul
 
-                    docker rm -f ecommerce-test-db 2>nul
+                echo.
+                echo ===== STARTING MYSQL TEST DATABASE =====
 
-                    echo.
-                    echo ===== STARTING MYSQL TEST DATABASE =====
+                docker run -d ^
+                  --name ecommerce-test-db ^
+                  -e MYSQL_ROOT_PASSWORD=root ^
+                  -e MYSQL_DATABASE=ecommerce ^
+                  -e MYSQL_USER=ecommerce ^
+                  -e MYSQL_PASSWORD=ecommerce123 ^
+                  -v "%WORKSPACE%\\docker\\mysql\\init.sql:/docker-entrypoint-initdb.d/init.sql:ro" ^
+                  mysql:8.4
 
-                    docker run -d ^
-                      --name ecommerce-test-db ^
-                      -e MYSQL_ROOT_PASSWORD=root ^
-                      -e MYSQL_DATABASE=ecommerce ^
-                      -e MYSQL_USER=ecommerce ^
-                      -e MYSQL_PASSWORD=ecommerce123 ^
-                      mysql:8.4
+                if errorlevel 1 (
+                    echo ERROR: MYSQL TEST DATABASE FAILED TO START
+                    exit /b 1
+                )
 
-                    if errorlevel 1 (
-                        echo ERROR: MYSQL TEST DATABASE FAILED TO START
-                        exit /b 1
-                    )
+                echo.
+                echo ===== WAITING FOR MYSQL TO BE READY =====
 
-                    echo.
-                    echo ===== WAITING FOR MYSQL =====
+                :wait_mysql
+                docker exec ecommerce-test-db mysqladmin ping ^
+                  -h localhost ^
+                  -u root ^
+                  -proot ^
+                  --silent >nul 2>&1
 
-                    timeout /t 30 /nobreak
+                if errorlevel 1 (
+                    echo MySQL is still starting...
+                    powershell -Command "Start-Sleep -Seconds 5"
+                    goto wait_mysql
+                )
 
-                    echo.
-                    echo ===== RUNNING PYTHON BACKEND TESTS =====
+                echo MySQL is READY
 
-                    docker run --rm ^
-                      --link ecommerce-test-db:mysql ^
-                      -e MYSQL_USER=ecommerce ^
-                      -e MYSQL_PASSWORD=ecommerce123 ^
-                      -e MYSQL_HOST=mysql ^
-                      -e MYSQL_PORT=3306 ^
-                      -e MYSQL_DATABASE=ecommerce ^
-                      -v "%CD%\\backend:/app" ^
-                      -w /app ^
-                      python:3.11-slim ^
-                      sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
+                echo.
+                echo ===== VERIFYING PRODUCTS TABLE =====
 
-                    if errorlevel 1 (
-                        echo.
-                        echo ERROR: BACKEND TESTS FAILED
+                docker exec ecommerce-test-db mysql ^
+                  -u root ^
+                  -proot ^
+                  -e "USE ecommerce; SHOW TABLES;"
 
-                        docker rm -f ecommerce-test-db
-
-                        exit /b 1
-                    )
-
-                    echo.
-                    echo ===== CLEANING TEST DATABASE =====
-
+                if errorlevel 1 (
+                    echo ERROR: DATABASE INITIALIZATION FAILED
+                    docker logs ecommerce-test-db
                     docker rm -f ecommerce-test-db
+                    exit /b 1
+                )
 
+                echo.
+                echo ===== RUNNING PYTHON BACKEND TESTS =====
+
+                docker run --rm ^
+                  --link ecommerce-test-db:mysql ^
+                  -e MYSQL_USER=ecommerce ^
+                  -e MYSQL_PASSWORD=ecommerce123 ^
+                  -e MYSQL_HOST=mysql ^
+                  -e MYSQL_PORT=3306 ^
+                  -e MYSQL_DATABASE=ecommerce ^
+                  -v "%WORKSPACE%\\backend:/app" ^
+                  -w /app ^
+                  python:3.11-slim ^
+                  sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
+
+                if errorlevel 1 (
                     echo.
-                    echo ===== BACKEND TESTS PASSED =====
+                    echo ERROR: BACKEND TESTS FAILED
+                    docker logs ecommerce-test-db
+                    docker rm -f ecommerce-test-db
+                    exit /b 1
+                )
+
+                echo.
+                echo ===== BACKEND TESTS PASSED =====
+
+                docker rm -f ecommerce-test-db
                 '''
             }
         }
