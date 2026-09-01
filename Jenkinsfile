@@ -25,7 +25,7 @@ pipeline {
             steps {
                 withCredentials([
                     sshUserPrivateKey(
-                        credentialsId: 'ec2-ssh-key',
+                        credentialsId: 'EC2_KEY',
                         keyFileVariable: 'EC2_KEY',
                         usernameVariable: 'EC2_USER'
                     )
@@ -33,9 +33,21 @@ pipeline {
                     bat '''
                         echo ===== TESTING JENKINS TO EC2 SSH =====
                         echo User: %EC2_USER%
-                        echo Testing connection...
+                        echo Key: %EC2_KEY%
 
-                        ssh -i "%EC2_KEY%" -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL %EC2_USER%@3.109.200.146 "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
+                        echo ===== FIXING SSH KEY PERMISSIONS =====
+
+                        icacls "%EC2_KEY%" /inheritance:r
+                        icacls "%EC2_KEY%" /remove "BUILTIN\\Users"
+                        icacls "%EC2_KEY%" /remove "Everyone"
+
+                        echo ===== TESTING CONNECTION =====
+
+                        ssh -i "%EC2_KEY%" ^
+                          -o StrictHostKeyChecking=no ^
+                          -o UserKnownHostsFile=NUL ^
+                          %EC2_USER%@3.109.200.146 ^
+                          "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
                     '''
                 }
             }
