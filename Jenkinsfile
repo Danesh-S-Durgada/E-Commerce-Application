@@ -23,14 +23,19 @@ pipeline {
 
         stage('Test EC2 SSH') {
             steps {
-                sshagent(['ec2-ssh-key']) {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'ec2-ssh-key',
+                        keyFileVariable: 'EC2_KEY',
+                        usernameVariable: 'EC2_USER'
+                    )
+                ]) {
                     bat '''
                         echo ===== TESTING JENKINS TO EC2 SSH =====
+                        echo User: %EC2_USER%
+                        echo Testing connection...
 
-                        ssh -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          ubuntu@3.109.200.146 ^
-                          "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
+                        ssh -i "%EC2_KEY%" -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL %EC2_USER%@3.109.200.146 "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
                     '''
                 }
             }
