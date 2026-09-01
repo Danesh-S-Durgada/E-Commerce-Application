@@ -1,4 +1,3 @@
-```groovy
 pipeline {
     agent any
 
@@ -933,4 +932,4 @@ If deployment failed, check:
         }
     }
 }
-```
+
