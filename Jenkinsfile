@@ -218,8 +218,8 @@ pipeline {
                 echo ===== VERIFYING PRODUCTS TABLE =====
 
                 docker exec ecommerce-test-db mysql ^
-                  -u root ^
-                  -proot ^
+                  -u ecommerce ^
+                  -pecommerce123 ^
                   -e "USE ecommerce; SHOW TABLES;"
 
                 if errorlevel 1 (
