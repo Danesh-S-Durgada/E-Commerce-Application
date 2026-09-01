@@ -8,31 +8,38 @@ pipeline {
         // DOCKER IMAGE NAMES
         // =========================================================
 
-        BACKEND_IMAGE  = "cloud-ecommerce-backend"
+        BACKEND_IMAGE = "cloud-ecommerce-backend"
         FRONTEND_IMAGE = "cloud-ecommerce-frontend"
-        IMAGE_TAG      = "${BUILD_NUMBER}"
+        IMAGE_TAG = "${BUILD_NUMBER}"
 
         // =========================================================
         // AWS / ECR
         // =========================================================
 
-        AWS_REGION     = "ap-south-1"
+        AWS_REGION = "ap-south-1"
         AWS_ACCOUNT_ID = "604393641173"
 
         ECR_REGISTRY = "604393641173.dkr.ecr.ap-south-1.amazonaws.com"
 
-        ECR_BACKEND =
-            "604393641173.dkr.ecr.ap-south-1.amazonaws.com/cloud-ecommerce-backend"
-
-        ECR_FRONTEND =
-            "604393641173.dkr.ecr.ap-south-1.amazonaws.com/cloud-ecommerce-frontend"
+        ECR_BACKEND = "604393641173.dkr.ecr.ap-south-1.amazonaws.com/cloud-ecommerce-backend"
+        ECR_FRONTEND = "604393641173.dkr.ecr.ap-south-1.amazonaws.com/cloud-ecommerce-frontend"
 
         // =========================================================
         // EC2
         // =========================================================
 
-        EC2_HOST    = "3.109.200.146"
+        EC2_HOST = "3.109.200.146"
         EC2_APP_DIR = "/home/ubuntu/E-Commerce-Application"
+
+        // =========================================================
+        // TEST DATABASE
+        // =========================================================
+
+        TEST_DB_CONTAINER = "ecommerce-test-db"
+        TEST_DB_NAME = "ecommerce"
+        TEST_DB_USER = "ecommerce"
+        TEST_DB_PASSWORD = "ecommerce123"
+        TEST_DB_ROOT_PASSWORD = "root123"
     }
 
     stages {
@@ -46,7 +53,7 @@ pipeline {
             steps {
 
                 echo '=================================================='
-                echo '             CHECKING OUT SOURCE CODE'
+                echo '              CHECKING OUT SOURCE CODE'
                 echo '=================================================='
 
                 checkout scm
@@ -64,34 +71,38 @@ pipeline {
                 withCredentials([
                     sshUserPrivateKey(
                         credentialsId: 'EC2_KEY',
-                        keyFileVariable: 'EC2_KEY',
+                        keyFileVariable: 'EC2_KEY_FILE',
                         usernameVariable: 'EC2_USER'
                     )
                 ]) {
 
                     bat '''
                         echo ==================================================
-                        echo             TESTING JENKINS TO EC2 SSH
+                        echo          TESTING JENKINS TO EC2 SSH
                         echo ==================================================
 
                         echo User: %EC2_USER%
                         echo EC2: %EC2_HOST%
-                        echo.
 
+                        echo.
+                        echo ===== FIXING SSH KEY PERMISSIONS =====
+
+                        icacls "%EC2_KEY_FILE%" /inheritance:r
+                        icacls "%EC2_KEY_FILE%" /grant:r "SYSTEM:(R)"
+
+                        echo.
                         echo ===== SSH KEY PERMISSIONS =====
 
-                        icacls "%EC2_KEY%" /inheritance:r
-                        icacls "%EC2_KEY%" /grant:r "SYSTEM:(R)"
-                        icacls "%EC2_KEY%"
+                        icacls "%EC2_KEY_FILE%"
 
                         echo.
                         echo ===== TESTING SSH CONNECTION =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "echo EC2 SSH CONNECTION SUCCESSFUL && hostname && whoami"
 
                         if errorlevel 1 (
                             echo.
@@ -133,6 +144,15 @@ pipeline {
                     )
 
                     echo.
+                    echo ===== DOCKER COMPOSE =====
+                    docker compose version
+
+                    if errorlevel 1 (
+                        echo ERROR: DOCKER COMPOSE NOT AVAILABLE
+                        exit /b 1
+                    )
+
+                    echo.
                     echo ===== AWS CLI =====
                     aws --version
 
@@ -145,13 +165,8 @@ pipeline {
                     echo ===== GIT =====
                     git --version
 
-                    if errorlevel 1 (
-                        echo ERROR: GIT NOT AVAILABLE
-                        exit /b 1
-                    )
-
                     echo.
-                    echo ===== NODE TEST =====
+                    echo ===== NODE =====
                     docker run --rm node:22-alpine node --version
 
                     if errorlevel 1 (
@@ -160,7 +175,7 @@ pipeline {
                     )
 
                     echo.
-                    echo ===== PYTHON TEST =====
+                    echo ===== PYTHON =====
                     docker run --rm python:3.11-slim python --version
 
                     if errorlevel 1 (
@@ -179,26 +194,29 @@ pipeline {
         // =========================================================
 
         stage('Backend Tests') {
+
             steps {
+
                 bat '''
                     echo ==================================================
-                    echo                 BACKEND TESTS
+                    echo                  BACKEND TESTS
                     echo ==================================================
-                    echo.
 
+                    echo.
                     echo ===== REMOVING OLD TEST DATABASE =====
-                    docker rm -f ecommerce-test-db 2>nul
+
+                    docker rm -f %TEST_DB_CONTAINER% >nul 2>&1
 
                     echo.
                     echo ===== STARTING MYSQL TEST DATABASE =====
 
                     docker run -d ^
-                      --name ecommerce-test-db ^
-                      -e MYSQL_ROOT_PASSWORD=root ^
-                      -e MYSQL_DATABASE=ecommerce ^
-                      -e MYSQL_USER=ecommerce ^
-                      -e MYSQL_PASSWORD=ecommerce123 ^
-                      mysql:8.4
+                        --name %TEST_DB_CONTAINER% ^
+                        -e MYSQL_ROOT_PASSWORD=%TEST_DB_ROOT_PASSWORD% ^
+                        -e MYSQL_DATABASE=%TEST_DB_NAME% ^
+                        -e MYSQL_USER=%TEST_DB_USER% ^
+                        -e MYSQL_PASSWORD=%TEST_DB_PASSWORD% ^
+                        mysql:8.4
 
                     if errorlevel 1 (
                         echo ERROR: MYSQL TEST DATABASE FAILED TO START
@@ -206,144 +224,191 @@ pipeline {
                     )
 
                     echo.
-                    echo ===== WAITING FOR MYSQL TO INITIALIZE =====
+                    echo ===== WAITING FOR MYSQL TO START =====
 
                     set MYSQL_READY=0
 
                     for /L %%i in (1,1,40) do (
-                        docker exec ecommerce-test-db ^
-                          mysqladmin ping ^
-                          -h 127.0.0.1 ^
-                          -u root ^
-                          -proot ^
-                          --silent >nul 2>&1
+
+                        docker exec %TEST_DB_CONTAINER% ^
+                            mysqladmin ping ^
+                            -h 127.0.0.1 ^
+                            -u root ^
+                            -p%TEST_DB_ROOT_PASSWORD% ^
+                            --silent >nul 2>&1
 
                         if not errorlevel 1 (
                             set MYSQL_READY=1
-                            goto mysql_ready
+                            echo MySQL is READY on attempt %%i
+                            goto MYSQL_READY
                         )
 
                         echo MySQL is still starting... Attempt %%i/40
+
                         powershell -Command "Start-Sleep -Seconds 3"
                     )
 
-                    :mysql_ready
+                    :MYSQL_READY
 
                     if "%MYSQL_READY%"=="0" (
+
                         echo.
                         echo ERROR: MYSQL DID NOT BECOME READY
+
                         echo.
                         echo ===== MYSQL LOGS =====
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
                         exit /b 1
                     )
 
                     echo.
-                    echo ===== MYSQL SERVER IS READY =====
+                    echo ===== VERIFYING ROOT ACCESS =====
 
-                    echo.
-                    echo ===== WAITING FOR APPLICATION USER =====
+                    docker exec %TEST_DB_CONTAINER% ^
+                        mysql ^
+                        -u root ^
+                        -p%TEST_DB_ROOT_PASSWORD% ^
+                        -e "SELECT VERSION();"
 
-                    set USER_READY=0
+                    if errorlevel 1 (
 
-                    for /L %%i in (1,1,20) do (
-                        docker exec ecommerce-test-db ^
-                          mysql ^
-                          -u ecommerce ^
-                          -pecommerce123 ^
-                          -e "SELECT 1;" >nul 2>&1
+                        echo ERROR: ROOT DATABASE LOGIN FAILED
 
-                        if not errorlevel 1 (
-                            set USER_READY=1
-                            goto mysql_user_ready
-                        )
+                        docker logs %TEST_DB_CONTAINER%
 
-                        echo Ecommerce user is not ready... Attempt %%i/20
-                        powershell -Command "Start-Sleep -Seconds 2"
+                        docker rm -f %TEST_DB_CONTAINER%
+
+                        exit /b 1
                     )
 
-                    :mysql_user_ready
+                    echo.
+                    echo ===== EXECUTING DATABASE INIT SCRIPT =====
 
-                    if "%USER_READY%"=="0" (
-                        echo.
-                        echo ERROR: ECOMMERCE MYSQL USER LOGIN FAILED
+                    if not exist "%WORKSPACE%\\docker\\mysql\\init.sql" (
+
+                        echo ERROR: docker/mysql/init.sql NOT FOUND
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
+                        exit /b 1
+                    )
+
+                    docker exec -i %TEST_DB_CONTAINER% ^
+                        mysql ^
+                        -u root ^
+                        -p%TEST_DB_ROOT_PASSWORD% ^
+                        %TEST_DB_NAME% ^
+                        < "%WORKSPACE%\\docker\\mysql\\init.sql"
+
+                    if errorlevel 1 (
+
+                        echo ERROR: INIT.SQL EXECUTION FAILED
+
                         echo.
                         echo ===== MYSQL LOGS =====
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
                         exit /b 1
                     )
 
                     echo.
-                    echo ===== ECOMMERCE MYSQL USER LOGIN SUCCESSFUL =====
+                    echo ===== RESETTING TEST DATABASE USER =====
 
-                    echo.
-                    echo ===== VERIFYING DATABASE =====
-
-                    docker exec ecommerce-test-db ^
-                      mysql ^
-                      -u ecommerce ^
-                      -pecommerce123 ^
-                      -e "SHOW DATABASES;"
+                    docker exec %TEST_DB_CONTAINER% ^
+                        mysql ^
+                        -u root ^
+                        -p%TEST_DB_ROOT_PASSWORD% ^
+                        -e "CREATE USER IF NOT EXISTS 'ecommerce'@'%%' IDENTIFIED BY 'ecommerce123'; ALTER USER 'ecommerce'@'%%' IDENTIFIED BY 'ecommerce123'; GRANT ALL PRIVILEGES ON ecommerce.* TO 'ecommerce'@'%%'; FLUSH PRIVILEGES;"
 
                     if errorlevel 1 (
-                        echo ERROR: DATABASE ACCESS FAILED
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
+
+                        echo ERROR: FAILED TO CONFIGURE DATABASE USER
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
                         exit /b 1
                     )
 
                     echo.
-                    echo ===== VERIFYING ECOMMERCE DATABASE =====
+                    echo ===== VERIFYING ECOMMERCE USER =====
 
-                    docker exec ecommerce-test-db ^
-                      mysql ^
-                      -u ecommerce ^
-                      -pecommerce123 ^
-                      -e "USE ecommerce; SELECT DATABASE(); SHOW TABLES;"
+                    docker exec %TEST_DB_CONTAINER% ^
+                        mysql ^
+                        -u ecommerce ^
+                        -pecommerce123 ^
+                        -e "USE ecommerce; SELECT CURRENT_USER(); SHOW TABLES;"
 
                     if errorlevel 1 (
-                        echo ERROR: ECOMMERCE DATABASE VERIFICATION FAILED
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
+
+                        echo ERROR: ECOMMERCE DATABASE USER LOGIN FAILED
+
+                        echo.
+                        echo ===== MYSQL USERS =====
+
+                        docker exec %TEST_DB_CONTAINER% ^
+                            mysql ^
+                            -u root ^
+                            -p%TEST_DB_ROOT_PASSWORD% ^
+                            -e "SELECT User,Host FROM mysql.user;"
+
+                        echo.
+                        echo ===== MYSQL LOGS =====
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
                         exit /b 1
                     )
+
+                    echo.
+                    echo ===== DATABASE VERIFICATION PASSED =====
 
                     echo.
                     echo ===== RUNNING PYTHON BACKEND TESTS =====
 
                     docker run --rm ^
-                      --link ecommerce-test-db:mysql ^
-                      -e MYSQL_USER=ecommerce ^
-                      -e MYSQL_PASSWORD=ecommerce123 ^
-                      -e MYSQL_HOST=mysql ^
-                      -e MYSQL_PORT=3306 ^
-                      -e MYSQL_DATABASE=ecommerce ^
-                      -v "%WORKSPACE%\\backend:/app" ^
-                      -w /app ^
-                      python:3.11-slim ^
-                      sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
+                        --link %TEST_DB_CONTAINER%:mysql ^
+                        -e MYSQL_USER=%TEST_DB_USER% ^
+                        -e MYSQL_PASSWORD=%TEST_DB_PASSWORD% ^
+                        -e MYSQL_HOST=mysql ^
+                        -e MYSQL_PORT=3306 ^
+                        -e MYSQL_DATABASE=%TEST_DB_NAME% ^
+                        -v "%WORKSPACE%\\backend:/app" ^
+                        -w /app ^
+                        python:3.11-slim ^
+                        sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
 
                     if errorlevel 1 (
+
                         echo.
                         echo ERROR: BACKEND TESTS FAILED
+
                         echo.
                         echo ===== MYSQL LOGS =====
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
+
+                        docker logs %TEST_DB_CONTAINER%
+
+                        docker rm -f %TEST_DB_CONTAINER%
+
                         exit /b 1
                     )
 
                     echo.
                     echo ===== BACKEND TESTS PASSED =====
 
-                    docker rm -f ecommerce-test-db
-
-                    echo.
-                    echo ==================================================
-                    echo             BACKEND TESTS PASSED
-                    echo ==================================================
+                    docker rm -f %TEST_DB_CONTAINER%
                 '''
             }
         }
@@ -358,21 +423,20 @@ pipeline {
 
                 bat '''
                     echo ==================================================
-                    echo                 FRONTEND BUILD
+                    echo                FRONTEND BUILD
                     echo ==================================================
 
-                    echo.
-                    echo ===== INSTALLING DEPENDENCIES AND BUILDING =====
-
                     docker run --rm ^
-                      -v "%WORKSPACE%\\frontend:/app" ^
-                      -w /app ^
-                      node:22-alpine ^
-                      sh -c "npm ci && npm run build"
+                        -v "%WORKSPACE%\\frontend:/app" ^
+                        -w /app ^
+                        node:22-alpine ^
+                        sh -c "npm ci && npm run build"
 
                     if errorlevel 1 (
+
                         echo.
                         echo ERROR: FRONTEND BUILD FAILED
+
                         exit /b 1
                     )
 
@@ -392,18 +456,20 @@ pipeline {
 
                 bat '''
                     echo ==================================================
-                    echo                 DOCKER IMAGE BUILD
+                    echo                DOCKER IMAGE BUILD
                     echo ==================================================
 
                     echo.
                     echo ===== BUILDING BACKEND IMAGE =====
 
                     docker build ^
-                      -t %BACKEND_IMAGE%:%IMAGE_TAG% ^
-                      ./backend
+                        -t %BACKEND_IMAGE%:%IMAGE_TAG% ^
+                        ./backend
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND DOCKER BUILD FAILED
+
                         exit /b 1
                     )
 
@@ -411,11 +477,13 @@ pipeline {
                     echo ===== BUILDING FRONTEND IMAGE =====
 
                     docker build ^
-                      -t %FRONTEND_IMAGE%:%IMAGE_TAG% ^
-                      ./frontend
+                        -t %FRONTEND_IMAGE%:%IMAGE_TAG% ^
+                        ./frontend
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND DOCKER BUILD FAILED
+
                         exit /b 1
                     )
 
@@ -445,22 +513,24 @@ pipeline {
 
                 bat '''
                     echo ==================================================
-                    echo                 TRIVY SECURITY SCAN
+                    echo                TRIVY SECURITY SCAN
                     echo ==================================================
 
                     echo.
                     echo ===== BACKEND IMAGE SCAN =====
 
                     docker run --rm ^
-                      -v //var/run/docker.sock:/var/run/docker.sock ^
-                      aquasec/trivy:latest ^
-                      image ^
-                      --exit-code 0 ^
-                      --severity HIGH,CRITICAL ^
-                      %BACKEND_IMAGE%:%IMAGE_TAG%
+                        -v /var/run/docker.sock:/var/run/docker.sock ^
+                        aquasec/trivy:latest ^
+                        image ^
+                        --exit-code 0 ^
+                        --severity HIGH,CRITICAL ^
+                        %BACKEND_IMAGE%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND TRIVY SCAN FAILED
+
                         exit /b 1
                     )
 
@@ -468,15 +538,17 @@ pipeline {
                     echo ===== FRONTEND IMAGE SCAN =====
 
                     docker run --rm ^
-                      -v //var/run/docker.sock:/var/run/docker.sock ^
-                      aquasec/trivy:latest ^
-                      image ^
-                      --exit-code 0 ^
-                      --severity HIGH,CRITICAL ^
-                      %FRONTEND_IMAGE%:%IMAGE_TAG%
+                        -v /var/run/docker.sock:/var/run/docker.sock ^
+                        aquasec/trivy:latest ^
+                        image ^
+                        --exit-code 0 ^
+                        --severity HIGH,CRITICAL ^
+                        %FRONTEND_IMAGE%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND TRIVY SCAN FAILED
+
                         exit /b 1
                     )
 
@@ -504,7 +576,7 @@ pipeline {
 
                     bat '''
                         echo ==================================================
-                        echo                    AWS ECR LOGIN
+                        echo                  AWS ECR LOGIN
                         echo ==================================================
 
                         set AWS_DEFAULT_REGION=%AWS_REGION%
@@ -515,7 +587,23 @@ pipeline {
                         aws sts get-caller-identity
 
                         if errorlevel 1 (
+
                             echo ERROR: AWS CREDENTIALS ARE INVALID
+
+                            exit /b 1
+                        )
+
+                        echo.
+                        echo ===== CHECKING ECR REPOSITORIES =====
+
+                        aws ecr describe-repositories ^
+                            --repository-names cloud-ecommerce-backend cloud-ecommerce-frontend ^
+                            --region %AWS_REGION%
+
+                        if errorlevel 1 (
+
+                            echo ERROR: ECR REPOSITORIES NOT FOUND OR ACCESS DENIED
+
                             exit /b 1
                         )
 
@@ -523,13 +611,15 @@ pipeline {
                         echo ===== LOGIN TO ECR =====
 
                         aws ecr get-login-password ^
-                          --region %AWS_REGION% ^
-                          | docker login ^
-                          --username AWS ^
-                          --password-stdin %ECR_REGISTRY%
+                            --region %AWS_REGION% ^
+                            | docker login ^
+                            --username AWS ^
+                            --password-stdin %ECR_REGISTRY%
 
                         if errorlevel 1 (
+
                             echo ERROR: ECR LOGIN FAILED
+
                             exit /b 1
                         )
 
@@ -541,7 +631,7 @@ pipeline {
         }
 
         // =========================================================
-        // 9. TAG IMAGES FOR ECR
+        // 9. TAG IMAGES
         // =========================================================
 
         stage('Tag Images for ECR') {
@@ -550,18 +640,20 @@ pipeline {
 
                 bat '''
                     echo ==================================================
-                    echo               TAGGING IMAGES FOR ECR
+                    echo              TAGGING IMAGES FOR ECR
                     echo ==================================================
 
                     echo.
                     echo ===== BACKEND VERSION TAG =====
 
                     docker tag ^
-                      %BACKEND_IMAGE%:%IMAGE_TAG% ^
-                      %ECR_BACKEND%:%IMAGE_TAG%
+                        %BACKEND_IMAGE%:%IMAGE_TAG% ^
+                        %ECR_BACKEND%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND VERSION TAG FAILED
+
                         exit /b 1
                     )
 
@@ -569,11 +661,13 @@ pipeline {
                     echo ===== BACKEND LATEST TAG =====
 
                     docker tag ^
-                      %BACKEND_IMAGE%:%IMAGE_TAG% ^
-                      %ECR_BACKEND%:latest
+                        %BACKEND_IMAGE%:%IMAGE_TAG% ^
+                        %ECR_BACKEND%:latest
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND LATEST TAG FAILED
+
                         exit /b 1
                     )
 
@@ -581,11 +675,13 @@ pipeline {
                     echo ===== FRONTEND VERSION TAG =====
 
                     docker tag ^
-                      %FRONTEND_IMAGE%:%IMAGE_TAG% ^
-                      %ECR_FRONTEND%:%IMAGE_TAG%
+                        %FRONTEND_IMAGE%:%IMAGE_TAG% ^
+                        %ECR_FRONTEND%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND VERSION TAG FAILED
+
                         exit /b 1
                     )
 
@@ -593,11 +689,13 @@ pipeline {
                     echo ===== FRONTEND LATEST TAG =====
 
                     docker tag ^
-                      %FRONTEND_IMAGE%:%IMAGE_TAG% ^
-                      %ECR_FRONTEND%:latest
+                        %FRONTEND_IMAGE%:%IMAGE_TAG% ^
+                        %ECR_FRONTEND%:latest
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND LATEST TAG FAILED
+
                         exit /b 1
                     )
 
@@ -617,7 +715,7 @@ pipeline {
 
                 bat '''
                     echo ==================================================
-                    echo                PUSHING IMAGES TO ECR
+                    echo              PUSHING IMAGES TO ECR
                     echo ==================================================
 
                     echo.
@@ -626,7 +724,9 @@ pipeline {
                     docker push %ECR_BACKEND%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND VERSION PUSH FAILED
+
                         exit /b 1
                     )
 
@@ -636,7 +736,9 @@ pipeline {
                     docker push %ECR_BACKEND%:latest
 
                     if errorlevel 1 (
+
                         echo ERROR: BACKEND LATEST PUSH FAILED
+
                         exit /b 1
                     )
 
@@ -646,7 +748,9 @@ pipeline {
                     docker push %ECR_FRONTEND%:%IMAGE_TAG%
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND VERSION PUSH FAILED
+
                         exit /b 1
                     )
 
@@ -656,13 +760,15 @@ pipeline {
                     docker push %ECR_FRONTEND%:latest
 
                     if errorlevel 1 (
+
                         echo ERROR: FRONTEND LATEST PUSH FAILED
+
                         exit /b 1
                     )
 
                     echo.
                     echo ==================================================
-                    echo                ECR PUSH COMPLETED
+                    echo              ECR PUSH COMPLETED
                     echo ==================================================
                 '''
             }
@@ -679,118 +785,147 @@ pipeline {
                 withCredentials([
                     sshUserPrivateKey(
                         credentialsId: 'EC2_KEY',
-                        keyFileVariable: 'EC2_KEY',
+                        keyFileVariable: 'EC2_KEY_FILE',
                         usernameVariable: 'EC2_USER'
                     )
                 ]) {
 
                     bat '''
-
                         echo ==================================================
                         echo                 DEPLOYING TO EC2
                         echo ==================================================
 
                         echo.
-                        echo ===== SSH KEY PERMISSIONS =====
+                        echo ===== FIXING SSH KEY PERMISSIONS =====
 
-                        icacls "%EC2_KEY%" /inheritance:r
-                        icacls "%EC2_KEY%" /grant:r "SYSTEM:(R)"
+                        icacls "%EC2_KEY_FILE%" /inheritance:r
+                        icacls "%EC2_KEY_FILE%" /grant:r "SYSTEM:(R)"
 
                         echo.
-                        echo ===== TESTING EC2 SSH =====
+                        echo ===== TESTING SSH CONNECTION =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "echo SSH CONNECTION SUCCESSFUL"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "echo SSH CONNECTION SUCCESSFUL"
 
                         if errorlevel 1 (
+
                             echo ERROR: SSH CONNECTION FAILED
+
                             exit /b 1
                         )
 
                         echo.
                         echo ===== CHECKING EC2 DOCKER =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "docker --version && docker compose version"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "docker --version && docker compose version"
 
                         if errorlevel 1 (
+
                             echo ERROR: DOCKER OR DOCKER COMPOSE NOT AVAILABLE
+
                             exit /b 1
                         )
 
                         echo.
                         echo ===== CHECKING APPLICATION DIRECTORY =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "test -f %EC2_APP_DIR%/docker-compose.yml"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "test -f %EC2_APP_DIR%/docker-compose.yml"
 
                         if errorlevel 1 (
+
                             echo ERROR: docker-compose.yml NOT FOUND
+
+                            exit /b 1
+                        )
+
+                        echo.
+                        echo ===== CHECKING EC2 AWS CLI =====
+
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "aws --version"
+
+                        if errorlevel 1 (
+
+                            echo ERROR: AWS CLI NOT AVAILABLE ON EC2
+
                             exit /b 1
                         )
 
                         echo.
                         echo ===== LOGIN TO ECR ON EC2 =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%"
 
                         if errorlevel 1 (
+
                             echo ERROR: EC2 ECR LOGIN FAILED
+
                             exit /b 1
                         )
 
                         echo.
                         echo ===== PULLING BACKEND IMAGE =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "docker pull %ECR_BACKEND%:latest"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "docker pull %ECR_BACKEND%:latest"
 
                         if errorlevel 1 (
+
                             echo ERROR: BACKEND IMAGE PULL FAILED
+
                             exit /b 1
                         )
 
                         echo.
                         echo ===== PULLING FRONTEND IMAGE =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "docker pull %ECR_FRONTEND%:latest"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "docker pull %ECR_FRONTEND%:latest"
 
                         if errorlevel 1 (
+
                             echo ERROR: FRONTEND IMAGE PULL FAILED
+
                             exit /b 1
                         )
 
                         echo.
-                        echo ===== DEPLOYING WITH DOCKER COMPOSE =====
+                        echo ===== DEPLOYING APPLICATION =====
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "cd %EC2_APP_DIR% && docker compose pull && docker compose up -d --remove-orphans"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "cd %EC2_APP_DIR% && docker compose up -d"
 
                         if errorlevel 1 (
+
                             echo ERROR: DOCKER COMPOSE DEPLOYMENT FAILED
+
                             exit /b 1
                         )
 
@@ -801,156 +936,141 @@ pipeline {
 
                         echo.
                         echo ==================================================
-                        echo              CONTAINER STATUS
+                        echo             CONTAINER STATUS
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "cd %EC2_APP_DIR% && docker compose ps"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "cd %EC2_APP_DIR% && docker compose ps"
 
                         echo.
                         echo ==================================================
-                        echo              MYSQL HEALTH CHECK
+                        echo              WAITING FOR MYSQL
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "docker inspect --format="{{.State.Health.Status}}" ecommerce-mysql"
-
-                        echo.
-                        echo ===== WAITING FOR MYSQL =====
-
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "bash -c 'for i in $(seq 1 30); do s=$(docker inspect -f "{{.State.Health.Status}}" ecommerce-mysql 2>/dev/null); echo MYSQL_STATUS=$s; if [ "$s" = "healthy" ]; then exit 0; fi; sleep 5; done; exit 1'"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "bash -c 'for i in {1..30}; do status=$(docker inspect -f "{{.State.Health.Status}}" ecommerce-mysql 2>/dev/null || true); echo MYSQL_STATUS=$status; if [ "$status" = "healthy" ]; then exit 0; fi; sleep 5; done; echo MYSQL HEALTH CHECK FAILED; exit 1'"
 
                         if errorlevel 1 (
+
                             echo.
                             echo ERROR: MYSQL DID NOT BECOME HEALTHY
 
                             echo.
                             echo ===== MYSQL LOGS =====
 
-                            ssh -i "%EC2_KEY%" ^
-                              -o StrictHostKeyChecking=no ^
-                              -o UserKnownHostsFile=NUL ^
-                              %EC2_USER%@%EC2_HOST% ^
-                              "docker logs --tail 100 ecommerce-mysql"
+                            ssh -i "%EC2_KEY_FILE%" ^
+                                -o StrictHostKeyChecking=no ^
+                                -o UserKnownHostsFile=NUL ^
+                                %EC2_USER%@%EC2_HOST% ^
+                                "docker logs --tail 100 ecommerce-mysql"
 
                             exit /b 1
                         )
 
                         echo.
-                        echo ===== MYSQL IS HEALTHY =====
-
-                        echo.
                         echo ==================================================
-                        echo              BACKEND HEALTH CHECK
+                        echo              WAITING FOR BACKEND
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "bash -c 'for i in $(seq 1 30); do s=$(docker inspect -f "{{.State.Health.Status}}" ecommerce-backend 2>/dev/null); echo BACKEND_STATUS=$s; if [ "$s" = "healthy" ]; then exit 0; fi; sleep 5; done; exit 1'"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "bash -c 'for i in {1..30}; do status=$(docker inspect -f "{{.State.Health.Status}}" ecommerce-backend 2>/dev/null || true); echo BACKEND_STATUS=$status; if [ "$status" = "healthy" ]; then exit 0; fi; sleep 5; done; echo BACKEND HEALTH CHECK FAILED; exit 1'"
 
                         if errorlevel 1 (
+
                             echo.
                             echo ERROR: BACKEND DID NOT BECOME HEALTHY
 
                             echo.
                             echo ===== BACKEND LOGS =====
 
-                            ssh -i "%EC2_KEY%" ^
-                              -o StrictHostKeyChecking=no ^
-                              -o UserKnownHostsFile=NUL ^
-                              %EC2_USER%@%EC2_HOST% ^
-                              "docker logs --tail 100 ecommerce-backend"
+                            ssh -i "%EC2_KEY_FILE%" ^
+                                -o StrictHostKeyChecking=no ^
+                                -o UserKnownHostsFile=NUL ^
+                                %EC2_USER%@%EC2_HOST% ^
+                                "docker logs --tail 100 ecommerce-backend"
 
                             exit /b 1
                         )
-
-                        echo.
-                        echo ===== BACKEND IS HEALTHY =====
 
                         echo.
                         echo ==================================================
                         echo             VERIFYING BACKEND API
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "curl -fsS http://127.0.0.1:8000/health"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "curl -fsS http://127.0.0.1:8000/health"
 
                         if errorlevel 1 (
+
                             echo.
                             echo ERROR: BACKEND /health CHECK FAILED
 
-                            ssh -i "%EC2_KEY%" ^
-                              -o StrictHostKeyChecking=no ^
-                              -o UserKnownHostsFile=NUL ^
-                              %EC2_USER%@%EC2_HOST% ^
-                              "docker logs --tail 100 ecommerce-backend"
+                            ssh -i "%EC2_KEY_FILE%" ^
+                                -o StrictHostKeyChecking=no ^
+                                -o UserKnownHostsFile=NUL ^
+                                %EC2_USER%@%EC2_HOST% ^
+                                "docker logs --tail 100 ecommerce-backend"
 
                             exit /b 1
                         )
-
-                        echo.
-                        echo ===== BACKEND API VERIFIED =====
 
                         echo.
                         echo ==================================================
                         echo             VERIFYING FRONTEND
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "curl -fsS -I http://127.0.0.1:4200"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "curl -fsS -I http://127.0.0.1:4200"
 
                         if errorlevel 1 (
-                            echo.
-                            echo ERROR: FRONTEND CHECK FAILED
 
-                            ssh -i "%EC2_KEY%" ^
-                              -o StrictHostKeyChecking=no ^
-                              -o UserKnownHostsFile=NUL ^
-                              %EC2_USER%@%EC2_HOST% ^
-                              "docker logs --tail 100 ecommerce-frontend"
+                            echo.
+                            echo ERROR: FRONTEND HEALTH CHECK FAILED
+
+                            ssh -i "%EC2_KEY_FILE%" ^
+                                -o StrictHostKeyChecking=no ^
+                                -o UserKnownHostsFile=NUL ^
+                                %EC2_USER%@%EC2_HOST% ^
+                                "docker logs --tail 100 ecommerce-frontend"
 
                             exit /b 1
                         )
-
-                        echo.
-                        echo ===== FRONTEND VERIFIED =====
 
                         echo.
                         echo ==================================================
                         echo             FINAL CONTAINER STATUS
                         echo ==================================================
 
-                        ssh -i "%EC2_KEY%" ^
-                          -o StrictHostKeyChecking=no ^
-                          -o UserKnownHostsFile=NUL ^
-                          %EC2_USER%@%EC2_HOST% ^
-                          "cd %EC2_APP_DIR% && docker compose ps"
+                        ssh -i "%EC2_KEY_FILE%" ^
+                            -o StrictHostKeyChecking=no ^
+                            -o UserKnownHostsFile=NUL ^
+                            %EC2_USER%@%EC2_HOST% ^
+                            "cd %EC2_APP_DIR% && docker compose ps"
 
                         echo.
                         echo ==================================================
                         echo              DEPLOYMENT SUCCESSFUL
                         echo ==================================================
+
                         echo Backend:  HEALTHY
-                        echo Frontend: VERIFIED
+                        echo Frontend: HEALTHY
                         echo MySQL:    HEALTHY
+
                         echo ==================================================
                     '''
                 }
@@ -994,25 +1114,24 @@ Health:
             CI/CD PIPELINE FAILED
 ==================================================
 
-Check the Jenkins Console Output.
+One or more stages failed.
 
-Possible failure areas:
+Check Jenkins Console Output.
 
+Possible areas:
+    - Checkout
     - EC2 SSH
     - Docker
-    - AWS CLI
-    - ECR login
-    - Backend tests
-    - Frontend build
-    - Docker build
-    - Trivy scan
-    - ECR push
-    - EC2 ECR login
-    - Docker image pull
-    - Docker Compose
-    - MySQL health
-    - Backend health
-    - Frontend verification
+    - Backend Tests
+    - Frontend Build
+    - Trivy
+    - AWS Credentials
+    - ECR Login
+    - ECR Push
+    - EC2 Deployment
+    - MySQL Health
+    - Backend Health
+    - Frontend Health
 
 ==================================================
 '''
@@ -1022,30 +1141,37 @@ Possible failure areas:
 
             bat '''
                 echo ==================================================
-                echo           JENKINS FINAL IMAGE STATUS
+                echo          JENKINS FINAL IMAGE STATUS
                 echo ==================================================
 
                 echo.
                 echo ===== LOCAL BACKEND IMAGES =====
+
                 docker images cloud-ecommerce-backend
 
                 echo.
                 echo ===== LOCAL FRONTEND IMAGES =====
+
                 docker images cloud-ecommerce-frontend
 
                 echo.
                 echo ===== ECR BACKEND IMAGES =====
+
                 docker images %ECR_BACKEND%
 
                 echo.
                 echo ===== ECR FRONTEND IMAGES =====
+
                 docker images %ECR_FRONTEND%
 
                 echo.
+                echo ===== CLEANING TEST DATABASE IF PRESENT =====
+
+                docker rm -f %TEST_DB_CONTAINER% >nul 2>&1
+
+                echo.
                 echo ===== PIPELINE FINISHED =====
-                echo ==================================================
             '''
         }
     }
 }
-
