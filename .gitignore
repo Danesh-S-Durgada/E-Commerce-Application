@@ -1,17 +1,37 @@
 node_modules/
 dist/
 coverage/
-__pycache__/
+
+# Angular
+
+.angular/
+
+# Python
+
+**pycache**/
 *.py[cod]
 .pytest_cache/
 .venv/
 venv/
+test-venv/
+
+# Environment
+
 .env
+
+# Terraform
+
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Logs
+
 crash.log
 *.log
+
+# IDE / OS
+
 .DS_Store
 .vscode/
 .idea/
