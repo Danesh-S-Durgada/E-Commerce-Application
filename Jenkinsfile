@@ -38,8 +38,11 @@ pipeline {
                         echo ===== FIXING SSH KEY PERMISSIONS =====
 
                         icacls "%EC2_KEY%" /inheritance:r
-                        icacls "%EC2_KEY%" /remove "BUILTIN\\Users"
-                        icacls "%EC2_KEY%" /remove "Everyone"
+
+                        icacls "%EC2_KEY%" /grant:r "SYSTEM:(R)"
+
+                        echo ===== SSH KEY PERMISSIONS =====
+                        icacls "%EC2_KEY%"
 
                         echo ===== TESTING CONNECTION =====
 
@@ -52,7 +55,6 @@ pipeline {
                 }
             }
         }
-
         stage('Check Environment') {
             steps {
                 bat '''
