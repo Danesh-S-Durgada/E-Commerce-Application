@@ -33,6 +33,16 @@ pipeline {
                     bat '''
                         echo ===== TESTING JENKINS TO EC2 SSH =====
 
+                        echo ===== FIXING PRIVATE KEY PERMISSIONS =====
+
+                        icacls "%SSH_KEY%" /inheritance:r
+                        icacls "%SSH_KEY%" /grant:r "%USERNAME%:R"
+
+                        echo ===== CHECKING KEY PERMISSIONS =====
+                        icacls "%SSH_KEY%"
+
+                        echo ===== CONNECTING TO EC2 =====
+
                         ssh -i "%SSH_KEY%" ^
                           -o StrictHostKeyChecking=no ^
                           -o UserKnownHostsFile=NUL ^
