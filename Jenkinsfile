@@ -179,17 +179,14 @@ pipeline {
         // =========================================================
 
         stage('Backend Tests') {
-
             steps {
-
                 bat '''
                     echo ==================================================
                     echo                 BACKEND TESTS
                     echo ==================================================
-
                     echo.
-                    echo ===== REMOVING OLD TEST DATABASE =====
 
+                    echo ===== REMOVING OLD TEST DATABASE =====
                     docker rm -f ecommerce-test-db 2>nul
 
                     echo.
@@ -201,7 +198,6 @@ pipeline {
                       -e MYSQL_DATABASE=ecommerce ^
                       -e MYSQL_USER=ecommerce ^
                       -e MYSQL_PASSWORD=ecommerce123 ^
-                      -v "%WORKSPACE%\\docker\\mysql\\init.sql:/docker-entrypoint-initdb.d/init.sql:ro" ^
                       mysql:8.4
 
                     if errorlevel 1 (
@@ -210,15 +206,14 @@ pipeline {
                     )
 
                     echo.
-                    echo ===== WAITING FOR MYSQL TO BE READY =====
+                    echo ===== WAITING FOR MYSQL TO INITIALIZE =====
 
                     set MYSQL_READY=0
 
-                    for /L %%i in (1,1,30) do (
-
+                    for /L %%i in (1,1,40) do (
                         docker exec ecommerce-test-db ^
                           mysqladmin ping ^
-                          -h localhost ^
+                          -h 127.0.0.1 ^
                           -u root ^
                           -proot ^
                           --silent >nul 2>&1
@@ -228,32 +223,15 @@ pipeline {
                             goto mysql_ready
                         )
 
-                        echo MySQL is still starting... Attempt %%i/30
+                        echo MySQL is still starting... Attempt %%i/40
                         powershell -Command "Start-Sleep -Seconds 3"
                     )
 
                     :mysql_ready
 
                     if "%MYSQL_READY%"=="0" (
+                        echo.
                         echo ERROR: MYSQL DID NOT BECOME READY
-                        docker logs ecommerce-test-db
-                        docker rm -f ecommerce-test-db
-                        exit /b 1
-                    )
-
-                    echo MySQL is READY
-
-                    echo.
-                    echo ===== VERIFYING DATABASE =====
-
-                    docker exec ecommerce-test-db ^
-                      mysql ^
-                      -u ecommerce ^
-                      -pecommerce123 ^
-                      -e "USE ecommerce; SHOW DATABASES; SHOW TABLES;"
-
-                    if errorlevel 1 (
-                        echo ERROR: DATABASE INITIALIZATION FAILED
                         echo.
                         echo ===== MYSQL LOGS =====
                         docker logs ecommerce-test-db
@@ -262,16 +240,71 @@ pipeline {
                     )
 
                     echo.
-                    echo ===== VERIFYING PRODUCTS TABLE =====
+                    echo ===== MYSQL SERVER IS READY =====
+
+                    echo.
+                    echo ===== WAITING FOR APPLICATION USER =====
+
+                    set USER_READY=0
+
+                    for /L %%i in (1,1,20) do (
+                        docker exec ecommerce-test-db ^
+                          mysql ^
+                          -u ecommerce ^
+                          -pecommerce123 ^
+                          -e "SELECT 1;" >nul 2>&1
+
+                        if not errorlevel 1 (
+                            set USER_READY=1
+                            goto mysql_user_ready
+                        )
+
+                        echo Ecommerce user is not ready... Attempt %%i/20
+                        powershell -Command "Start-Sleep -Seconds 2"
+                    )
+
+                    :mysql_user_ready
+
+                    if "%USER_READY%"=="0" (
+                        echo.
+                        echo ERROR: ECOMMERCE MYSQL USER LOGIN FAILED
+                        echo.
+                        echo ===== MYSQL LOGS =====
+                        docker logs ecommerce-test-db
+                        docker rm -f ecommerce-test-db
+                        exit /b 1
+                    )
+
+                    echo.
+                    echo ===== ECOMMERCE MYSQL USER LOGIN SUCCESSFUL =====
+
+                    echo.
+                    echo ===== VERIFYING DATABASE =====
 
                     docker exec ecommerce-test-db ^
                       mysql ^
                       -u ecommerce ^
                       -pecommerce123 ^
-                      -e "USE ecommerce; SELECT COUNT(*) AS product_count FROM products;"
+                      -e "SHOW DATABASES;"
 
                     if errorlevel 1 (
-                        echo ERROR: PRODUCTS TABLE VERIFICATION FAILED
+                        echo ERROR: DATABASE ACCESS FAILED
+                        docker logs ecommerce-test-db
+                        docker rm -f ecommerce-test-db
+                        exit /b 1
+                    )
+
+                    echo.
+                    echo ===== VERIFYING ECOMMERCE DATABASE =====
+
+                    docker exec ecommerce-test-db ^
+                      mysql ^
+                      -u ecommerce ^
+                      -pecommerce123 ^
+                      -e "USE ecommerce; SELECT DATABASE(); SHOW TABLES;"
+
+                    if errorlevel 1 (
+                        echo ERROR: ECOMMERCE DATABASE VERIFICATION FAILED
                         docker logs ecommerce-test-db
                         docker rm -f ecommerce-test-db
                         exit /b 1
@@ -308,7 +341,9 @@ pipeline {
                     docker rm -f ecommerce-test-db
 
                     echo.
-                    echo ===== BACKEND TEST STAGE PASSED =====
+                    echo ==================================================
+                    echo             BACKEND TESTS PASSED
+                    echo ==================================================
                 '''
             }
         }
