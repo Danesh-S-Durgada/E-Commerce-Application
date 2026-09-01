@@ -104,8 +104,37 @@ pipeline {
         stage('Backend Tests') {
             steps {
                 bat '''
-                    echo ===== BACKEND TESTS =====
-                    docker run --rm -v "%CD%\\backend:/app" -w /app python:3.11-slim sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
+                    echo ===== STARTING TEST DATABASE =====
+
+                    docker rm -f ecommerce-test-db 2>nul
+
+                    docker run -d ^
+                      --name ecommerce-test-db ^
+                      -e MYSQL_ROOT_PASSWORD=root ^
+                      -e MYSQL_DATABASE=ecommerce ^
+                      -e MYSQL_USER=ecommerce ^
+                      -e MYSQL_PASSWORD=ecommerce123 ^
+                      mysql:8.4
+
+                    echo ===== WAITING FOR MYSQL =====
+                    timeout /t 30 /nobreak
+
+                    echo ===== RUNNING BACKEND TESTS =====
+
+                    docker run --rm ^
+                      --link ecommerce-test-db:mysql ^
+                      -e MYSQL_USER=ecommerce ^
+                      -e MYSQL_PASSWORD=ecommerce123 ^
+                      -e MYSQL_HOST=mysql ^
+                      -e MYSQL_PORT=3306 ^
+                      -e MYSQL_DATABASE=ecommerce ^
+                      -v "%CD%\\backend:/app" ^
+                      -w /app ^
+                      python:3.11-slim ^
+                      sh -c "pip install --no-cache-dir -r requirements.txt && pytest tests -q"
+
+                    echo ===== CLEANING TEST DATABASE =====
+                    docker rm -f ecommerce-test-db
                 '''
             }
         }
